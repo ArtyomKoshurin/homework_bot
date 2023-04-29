@@ -1,11 +1,17 @@
-import logging
 import os
+
+import sys
+
 import time
+
 import telegram
+
+import logging
+from logging.handlers import RotatingFileHandler
 
 import requests
 
-from logging.handlers import RotatingFileHandler
+from dotenv import load_dotenv
 
 from exceptions import (
     StatusNotAccording,
@@ -13,8 +19,6 @@ from exceptions import (
     StatusIsUnexepted,
     MessageNotSent
 )
-
-from dotenv import load_dotenv
 
 load_dotenv()
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -32,8 +36,10 @@ handler = RotatingFileHandler(
     backupCount=5,
     encoding='utf-8'
 )
+second_handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+logger.addHandler(second_handler)
 
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
@@ -55,11 +61,10 @@ def check_tokens():
         TELEGRAM_CHAT_ID,
     ]
     for token in token_list:
-        if token is None:
+        if not token:
             message = f'Отсутствует необходимый токен: {token}'
             logging.critical(message)
             raise TokenRequired(message)
-    return True
 
 
 def send_message(bot, message):
@@ -67,22 +72,22 @@ def send_message(bot, message):
     try:
         logger.debug('Сообщение успешно отправлено')
         return bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-    except Exception as error:
-        logger.error(f'Не удалось отправить сообщение {error}')
+    except Exception:
         raise MessageNotSent('Сообщение не отправлено')
 
 
 def get_api_answer(timestamp):
     """Отправялем запрос к API Яндекса."""
-    PAYLOAD = {'from_date': timestamp}
+    payload = {'from_date': timestamp}
     try:
         homeworks = requests.get(
             ENDPOINT,
             headers=HEADERS,
-            params=PAYLOAD
+            params=payload
         )
-    except Exception as error:
-        logger.error(f'ошибка при запросе к API: {error}')
+    except requests.RequestException:
+        (f'Ошибка при запросе к API:'
+         f'Запрашиваемые параметры: {payload}, {ENDPOINT}')
     if homeworks.status_code != 200:
         raise StatusIsUnexepted(f'Эндпоинт недоступен. Ошибка: '
                                 f'{homeworks.status_code}')
@@ -92,16 +97,15 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверяем ответ на соответствие документации."""
     if not isinstance(response, dict):
-        raise TypeError('Ответ API не является словарем')
+        raise TypeError(f'Ответ API не является словарем'
+                        f'Тип полученных данных: {type(response)}')
     if 'homeworks' not in response:
-        raise KeyError('Отсутствует ключ "homework_name" в ответе API')
-    if not isinstance(response['homeworks'], list):
-        raise TypeError('Ответ API под ключом "homeworks" не является списком')
-
-    homeworks = response['homeworks'][0]
-    if not isinstance(response, dict):
-        raise TypeError('Ответ API не является списком')
-    return homeworks
+        raise KeyError('Отсутствует ключ "homeworks" в ответе API')
+    homework_list = response['homeworks']
+    if not isinstance(homework_list, list):
+        raise TypeError(f'Ответ API под ключом "homeworks" не является списком'
+                        f'Тип полученных данных: {type(homework_list)}')
+    return homework_list
 
 
 def parse_status(homework):
@@ -117,10 +121,7 @@ def parse_status(homework):
         verdict = HOMEWORK_VERDICTS[status]
         logger.debug('Неожиданных статусов не присутствует')
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    else:
-        message = f'Статус {status} не соответствует ожидаемому'
-        logger.error(message)
-        raise StatusNotAccording(message)
+    raise StatusNotAccording(f'Статус {status} не соответствует ожидаемому')
 
 
 def main():
@@ -128,19 +129,33 @@ def main():
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     check_tokens()
+    first_message = ''
     while True:
         try:
             response = get_api_answer(timestamp)
-            homework = check_response(response)
+            if not response:
+                logger.error('Ошибка при запросе к API')
+                raise requests.RequestException
+            homework = check_response(response)[0]
             if homework:
                 message = parse_status(homework)
+                try:
+                    send_message(bot, message)
+                except StatusNotAccording:
+                    logger.error(
+                        f'Статус {message.status} не соответствует ожидаемому')
+                except MessageNotSent:
+                    logger.error('Не удалось отправить сообщение')
             else:
-                message = 'Ваша домашка еще не принята на проверку'
-            send_message(bot, message)
+                print('Вашу домашку еще не проверили')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
+            if message != first_message:
+                send_message(bot, message)
+                first_message = message
         time.sleep(RETRY_PERIOD)
+        timestamp = response['current_date']
 
 
 if __name__ == '__main__':
