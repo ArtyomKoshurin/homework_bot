@@ -1,16 +1,11 @@
 import os
-
 import sys
-
 import time
 
 import telegram
-
 import logging
 from logging.handlers import RotatingFileHandler
-
 import requests
-
 from dotenv import load_dotenv
 
 from exceptions import (
@@ -85,9 +80,10 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=payload
         )
-    except requests.RequestException:
-        (f'Ошибка при запросе к API:'
-         f'Запрашиваемые параметры: {payload}, {ENDPOINT}')
+    except requests.RequestException as error:
+        raise error(
+            f'Ошибка при запросе к API: {error}'
+            f'Запрашиваемые параметры: {payload}, {ENDPOINT}')
     if homeworks.status_code != 200:
         raise StatusIsUnexepted(f'Эндпоинт недоступен. Ошибка: '
                                 f'{homeworks.status_code}')
@@ -101,6 +97,9 @@ def check_response(response):
                         f'Тип полученных данных: {type(response)}')
     if 'homeworks' not in response:
         raise KeyError('Отсутствует ключ "homeworks" в ответе API')
+    if 'current_date' not in response:
+        raise KeyError('Отсутствует ключ "current_date" в ответе API')
+
     homework_list = response['homeworks']
     if not isinstance(homework_list, list):
         raise TypeError(f'Ответ API под ключом "homeworks" не является списком'
@@ -133,29 +132,32 @@ def main():
     while True:
         try:
             response = get_api_answer(timestamp)
-            if not response:
-                logger.error('Ошибка при запросе к API')
-                raise requests.RequestException
             homework = check_response(response)[0]
+            # Не совсем понимаю, что ты иммешь ввиду под пустым списком.
+            # Как я понял - нужно поставить условие на наличие списка homework,
+            # и если его нет - поднять логгер с непроверенной домашкой,
+            # как я и сделал. Или нужно сначала присвоить переменной
+            # homework = check_response(response) без индекса, и проверять
+            # условие на ней?
             if homework:
                 message = parse_status(homework)
                 try:
                     send_message(bot, message)
-                except StatusNotAccording:
-                    logger.error(
-                        f'Статус {message.status} не соответствует ожидаемому')
                 except MessageNotSent:
                     logger.error('Не удалось отправить сообщение')
             else:
-                print('Вашу домашку еще не проверили')
+                logger.error('Вашу домашку еще не проверили')
+            timestamp = response['current_date']
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
             if message != first_message:
-                send_message(bot, message)
+                try:
+                    send_message(bot, message)
+                except MessageNotSent:
+                    logger.error('Не удалось отправить сообщение')
                 first_message = message
         time.sleep(RETRY_PERIOD)
-        timestamp = response['current_date']
 
 
 if __name__ == '__main__':
