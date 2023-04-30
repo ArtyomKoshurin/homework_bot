@@ -1,10 +1,10 @@
 import os
 import sys
 import time
-
-import telegram
 import logging
 from logging.handlers import RotatingFileHandler
+
+import telegram
 import requests
 from dotenv import load_dotenv
 
@@ -12,7 +12,8 @@ from exceptions import (
     StatusNotAccording,
     TokenRequired,
     StatusIsUnexepted,
-    MessageNotSent
+    MessageNotSent,
+    RequestNotAvailable
 )
 
 load_dotenv()
@@ -80,9 +81,9 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=payload
         )
-    except requests.RequestException as error:
-        raise error(
-            f'Ошибка при запросе к API: {error}'
+    except requests.RequestException:
+        raise RequestNotAvailable(
+            f'Ошибка при запросе к API.'
             f'Запрашиваемые параметры: {payload}, {ENDPOINT}')
     if homeworks.status_code != 200:
         raise StatusIsUnexepted(f'Эндпоинт недоступен. Ошибка: '
@@ -132,19 +133,11 @@ def main():
     while True:
         try:
             response = get_api_answer(timestamp)
-            homework = check_response(response)[0]
-            # Не совсем понимаю, что ты иммешь ввиду под пустым списком.
-            # Как я понял - нужно поставить условие на наличие списка homework,
-            # и если его нет - поднять логгер с непроверенной домашкой,
-            # как я и сделал. Или нужно сначала присвоить переменной
-            # homework = check_response(response) без индекса, и проверять
-            # условие на ней?
+            homework = check_response(response)
             if homework:
-                message = parse_status(homework)
-                try:
-                    send_message(bot, message)
-                except MessageNotSent:
-                    logger.error('Не удалось отправить сообщение')
+                last_homework = homework[0]
+                message = parse_status(last_homework)
+                send_message(bot, message)
             else:
                 logger.error('Вашу домашку еще не проверили')
             timestamp = response['current_date']

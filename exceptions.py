@@ -20,3 +20,9 @@ class MessageNotSent(Exception):
     """Исключение, возникающее при невозможности отправки сообщения."""
 
     pass
+
+
+class RequestNotAvailable(Exception):
+    """Исключение, возникающее при невозможности перехода по ссылке."""
+
+    pass
